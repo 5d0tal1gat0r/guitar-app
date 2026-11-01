@@ -93,7 +93,12 @@ class PracticeSession:
         return self.start_time + self.exercise.steps[index].beat * self.seconds_per_beat
 
     def step_end(self, index: int) -> float:
-        return self.step_start(index) + self.exercise.beats_per_note * self.seconds_per_beat
+        step = self.exercise.steps[index]
+        if index + 1 < len(self.exercise.steps):
+            duration = self.exercise.steps[index + 1].beat - step.beat
+        else:
+            duration = step.duration
+        return self.step_start(index) + duration * self.seconds_per_beat
 
     @property
     def finished(self) -> bool:

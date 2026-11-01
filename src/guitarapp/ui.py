@@ -12,12 +12,13 @@ from PySide6.QtGui import QFont, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QSlider, QSpinBox, QSplitter, QTabWidget,
+    QInputDialog, QMessageBox, QPlainTextEdit, QPushButton, QSlider, QSpinBox, QSplitter, QTabWidget,
     QToolBar, QVBoxLayout, QWidget,
 )
 
 from . import generator
 from .audio import MicInput, input_devices
+from .importers import load_import
 from .metronome import MAX_BPM, MIN_BPM, Metronome, TapTempo
 from .pitch import NoteReading, NoteTracker, Pitch, detect_pitch, reading_from_freq, rms
 from .practice import PracticeSession, StepResult, Verdict
@@ -825,20 +826,38 @@ class LibraryPage(QWidget):
         self.add_generated(exercise)
 
     def import_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import tab", str(Path.home()), "Tab files (*.tab *.txt)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import exercise",
+            str(Path.home()),
+            "Exercise files (*.tab *.txt *.gp3 *.gp4 *.gp5 *.musicxml *.xml)",
+        )
         if not path:
             return
         try:
-            exercise = parse_tab(Path(path).read_text(encoding="utf-8"), source=path)
-        except (TabError, ValueError, OSError) as error:
-            QMessageBox.warning(self, "Tab", f"Could not read the tab: {error}")
+            source_path = Path(path)
+            if source_path.suffix.lower() in {".tab", ".txt"}:
+                exercises = [parse_tab(source_path.read_text(encoding="utf-8"), source=path)]
+            else:
+                exercises = load_import(source_path)
+        except (ImportError, TabError, ValueError, OSError) as error:
+            QMessageBox.warning(self, "Import", f"Could not read the exercise: {error}")
             return
         folder = user_dir()
         folder.mkdir(parents=True, exist_ok=True)
-        if Path(path).suffix == ".tab":
-            shutil.copy(path, folder / Path(path).name)
+        if len(exercises) == 1:
+            exercise = exercises[0]
         else:
-            (folder / (Path(path).stem + ".tab")).write_text(render_tab(exercise), encoding="utf-8")
+            labels = [exercise.title for exercise in exercises]
+            selected, accepted = QInputDialog.getItem(self, "Choose track", "Track or part:", labels, 0, False)
+            if not accepted:
+                return
+            exercise = exercises[labels.index(selected)]
+        if source_path.suffix.lower() == ".tab":
+            shutil.copy(path, folder / source_path.name)
+        else:
+            stem = "".join(c if c.isalnum() else "-" for c in exercise.title.lower()).strip("-") or source_path.stem
+            (folder / f"{stem}.tab").write_text(render_tab(exercise), encoding="utf-8")
         self.reload()
 
     def open_folder(self) -> None:

@@ -1,7 +1,8 @@
 import pytest
+from pathlib import Path
 
 from guitarapp import generator
-from guitarapp.tabs import TabError, load_library, parse_tab, render_tab
+from guitarapp.tabs import Exercise, Step, TabError, load_library, parse_tab, render_tab
 from guitarapp.theory import midi_name
 
 WEB_TAB = """
@@ -69,3 +70,28 @@ def test_bundled_library_loads():
     exercises, errors = load_library()
     assert errors == []
     assert len(exercises) >= 6
+
+
+def test_library_loads_musicxml_from_extra_directory():
+    fixtures = Path(__file__).parent / "fixtures"
+
+    exercises, errors = load_library([fixtures])
+
+    assert errors == []
+    assert any(exercise.title == "Self Authored Exercise — Guitar" for exercise in exercises)
+
+
+def test_uneven_step_durations_round_trip():
+    exercise = Exercise(
+        "Uneven",
+        [
+            Step(0.0, ((0, 0),), 0.5),
+            Step(0.5, ((0, 2),), 1.5),
+            Step(2.0, ((0, 3),), 0.25),
+        ],
+        bpm=100,
+    )
+
+    back = parse_tab(render_tab(exercise))
+
+    assert back.steps == exercise.steps
