@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
@@ -18,10 +19,12 @@ from PySide6.QtWidgets import (
 
 from . import generator
 from .audio import MicInput, input_devices
+from .history import History, SessionRecord
 from .metronome import MAX_BPM, MIN_BPM, Metronome, TapTempo
 from .pitch import NoteReading, NoteTracker, Pitch, detect_pitch, reading_from_freq, rms
 from .practice import PracticeSession, StepResult, Verdict
 from .tabs import Exercise, TabError, load_library, parse_tab, render_tab, user_dir
+from .trainer_ui import ProgressPage, QuizPage
 from .theory import (
     CHORDS, NOTE_NAMES, SCALES, STANDARD_TUNING, STRING_NAMES, chord_pitch_classes,
     diatonic_triads, fret_for_midi, fret_positions, interval_name, midi_name, scale_pitch_classes,
@@ -373,10 +376,11 @@ class MetronomePage(QWidget):
 # ------------------------------------------------------------------ Practice
 
 class PracticePage(QWidget):
-    def __init__(self, hub: AudioHub, metronome: Metronome):
+    def __init__(self, hub: AudioHub, metronome: Metronome, history: History):
         super().__init__()
         self.hub = hub
         self.metronome = metronome
+        self.history = history
         self.exercise: Exercise | None = None
         self.session: PracticeSession | None = None
         self._started_metronome = False
@@ -387,6 +391,8 @@ class PracticePage(QWidget):
         self.description = QLabel("")
         self.description.setWordWrap(True)
         color_label(self.description, GREY)
+        self.record = QLabel("")
+        color_label(self.record, GREY)
 
         self.target = QLabel("–")
         self.target.setFont(big_font(48))
@@ -443,6 +449,7 @@ class PracticePage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.title)
         layout.addWidget(self.description)
+        layout.addWidget(self.record)
         layout.addSpacing(6)
         layout.addLayout(top)
         layout.addWidget(self.fretboard, 1)
@@ -461,12 +468,21 @@ class PracticePage(QWidget):
         self.exercise = exercise
         self.title.setText(exercise.title)
         self.description.setText(exercise.description)
+        self._show_record()
         self.bpm.setValue(exercise.bpm)
         self.strip.set_steps([" ".join(midi_name(m) for m in exercise.midi_notes(s)) for s in exercise.steps])
         self.start_button.setEnabled(True)
         self.result.setText(f"{len(exercise.steps)} notes. Press Start; a one-bar count-in comes first.")
         color_label(self.result, None)
         self._show_step(0)
+
+    def _show_record(self) -> None:
+        stats = self.history.stats(self.exercise.title) if self.exercise else None
+        if stats is None:
+            self.record.setText("Not played yet")
+            return
+        clean = f", fastest clean run {stats.best_clean_bpm:.0f} BPM" if stats.best_clean_bpm else ""
+        self.record.setText(f"Played {stats.sessions}×, best {stats.best_accuracy:.0%}{clean}")
 
     def toggle(self) -> None:
         if self.session is None:
@@ -590,6 +606,12 @@ class PracticePage(QWidget):
         if session is None:
             return
         summary = session.summary()
+        if summary.total:
+            self.history.add(SessionRecord(
+                session.exercise.title, datetime.now().isoformat(timespec="seconds"), session.bpm,
+                summary.total, summary.correct, summary.mean_abs_timing_ms,
+            ))
+            self._show_record()
         self.strip.set_current(None)
         self.target.setText("–")
         self.position.setText(" ")
@@ -960,11 +982,14 @@ class MainWindow(QMainWindow):
         self.bridge = BeatBridge(self)
         self.metronome = Metronome(SAMPLE_RATE, on_beat=self.bridge.beat.emit)
 
-        self.practice_page = PracticePage(self.hub, self.metronome)
+        self.history = History()
+        self.practice_page = PracticePage(self.hub, self.metronome, self.history)
         self.tuner_page = TunerPage(self.hub)
         self.metronome_page = MetronomePage(self.metronome, self.bridge)
         self.library_page = LibraryPage()
         self.theory_page = TheoryPage()
+        self.quiz_page = QuizPage(self.hub)
+        self.progress_page = ProgressPage(self.history)
         self.library_page.practice_requested.connect(self.open_practice)
         self.theory_page.practice_requested.connect(self.open_practice)
 
@@ -976,6 +1001,8 @@ class MainWindow(QMainWindow):
             (self.tuner_page, "Tuner"),
             (self.metronome_page, "Metronome"),
             (self.theory_page, "Theory"),
+            (self.quiz_page, "Quiz"),
+            (self.progress_page, "Progress"),
         ):
             self.tabs.addTab(page, name)
         self.setCentralWidget(self.tabs)
