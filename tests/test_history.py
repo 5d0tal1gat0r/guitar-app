@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from guitarapp.history import History, SessionRecord
 
 
@@ -34,8 +36,26 @@ def test_streak(tmp_path):
     assert h.streak(today=date(2026, 11, 5)) == 0
 
 
-def test_corrupt_file_is_kept_aside(tmp_path):
+@pytest.mark.parametrize("content", [
+    "{not json",
+    '{"title": "x"}',
+    '[{"title": "x", "when": "not-a-date", "bpm": 60, "total": 1, "correct": 1}]',
+    '[{"title": "x", "when": "2026-11-01T10:00:00", "bpm": 60, "total": 1, "correct": 5}]',
+    '[{"title": "x", "when": "2026-11-01T10:00:00", "bpm": -1, "total": 1, "correct": 1}]',
+    '[{"title": "x", "when": "2026-11-01T10:00:00", "bpm": 60, "total": 1, "correct": 1, "extra": 1}]',
+])
+def test_broken_file_is_kept_aside_and_app_still_works(tmp_path, content):
     path = tmp_path / "h.json"
-    path.write_text("{not json")
-    assert History(path).records == []
-    assert (tmp_path / "h.corrupt.json").exists()
+    path.write_text(content)
+    h = History(path)
+    assert h.records == [] and h.streak() == 0 and h.all_stats() == []
+    assert not path.exists()
+    assert len(list(tmp_path.glob("h.corrupt-*.json"))) == 1
+
+
+def test_second_corruption_does_not_overwrite_first_backup(tmp_path):
+    path = tmp_path / "h.json"
+    for _ in range(2):
+        path.write_text("{not json")
+        History(path)
+    assert len(list(tmp_path.glob("h.corrupt-*.json"))) == 2

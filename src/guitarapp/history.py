@@ -39,6 +39,18 @@ class ExerciseStats:
     last_played: str
 
 
+def _validated(record: SessionRecord) -> SessionRecord:
+    """Reject records that would crash later (bad dates, impossible counts)."""
+    datetime.fromisoformat(record.when)
+    if not isinstance(record.title, str):
+        raise TypeError("title must be text")
+    if not (isinstance(record.total, int) and isinstance(record.correct, int) and 0 <= record.correct <= record.total):
+        raise ValueError("correct/total out of range")
+    if not (isinstance(record.bpm, (int, float)) and record.bpm > 0):
+        raise ValueError("bpm must be positive")
+    return record
+
+
 def default_path() -> Path:
     base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
     return base / "guitar-app" / "history.json"
@@ -52,12 +64,13 @@ class History:
     def _load(self) -> list[SessionRecord]:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            return [SessionRecord(**item) for item in raw]
+            return [_validated(SessionRecord(**item)) for item in raw]
         except FileNotFoundError:
             return []
-        except (ValueError, TypeError):
-            # Keep a corrupt file for the user instead of overwriting it.
-            self.path.rename(self.path.with_suffix(".corrupt.json"))
+        except (ValueError, TypeError, AttributeError):
+            # Keep a broken file for the user instead of overwriting it.
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            self.path.rename(self.path.with_name(f"{self.path.stem}.corrupt-{stamp}.json"))
             return []
 
     def add(self, record: SessionRecord) -> None:
