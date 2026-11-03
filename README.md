@@ -20,6 +20,8 @@ and helps you build speed with a sample-accurate metronome.
   speed trainer that raises the tempo every N bars up to a target.
 - **Theory**: scales and chords in every key, interval names, step patterns,
   diatonic chords with Roman numerals, and the whole pattern on the fretboard.
+- **Progress**: local practice history, personal records and practice streaks.
+- **Quiz**: fretboard-note recognition by click or microphone, plus interval ear training.
 
 Detection is monophonic: play one note at a time. For a chord step, any one of
 its notes counts.
@@ -27,12 +29,17 @@ its notes counts.
 ## Install and run
 
 Needs Python 3.12+, [uv](https://docs.astral.sh/uv/) and PortAudio
-(`sudo pacman -S portaudio` on Arch).
+(`sudo pacman -S portaudio` on Arch, or `sudo apt install libportaudio2` on
+Debian/Ubuntu).
 
 ```bash
 uv sync
 uv run guitar-app
 ```
+
+The microphone is processed locally. The app has no account, telemetry or network service.
+Your imported exercises and practice history stay under
+`~/.local/share/guitar-app/` (or `$XDG_DATA_HOME/guitar-app/`).
 
 ## Tab format
 
@@ -67,6 +74,10 @@ uv sync --extra dev
 uv run pytest
 ```
 
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The project is currently
+an early Linux release: automated pitch and UI tests are in place, but audio latency and
+device behavior still vary by hardware.
+
 | Module | Purpose |
 | --- | --- |
 | `theory.py` | notes, frequencies, scales, chords, fretboard maps |
@@ -77,8 +88,11 @@ uv run pytest
 | `importers.py` | Guitar Pro and MusicXML import |
 | `generator.py` | exercise generators |
 | `audio.py` | microphone capture |
+| `history.py` | local practice sessions, records and streaks |
+| `quiz.py`, `trainer_ui.py` | fretboard and interval trainers |
 | `widgets.py`, `ui.py` | Qt (PySide6) interface |
 
 ## License
 
-MIT
+[MIT](LICENSE). The app does not include copyrighted songs; import only material you have
+the right to use.
