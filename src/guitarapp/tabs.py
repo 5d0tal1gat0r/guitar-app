@@ -34,6 +34,7 @@ _FRET_RE = re.compile(r"\d+")
 class Step:
     beat: float
     notes: tuple[tuple[int, int], ...]  # (string, fret); string 0 = lowest
+    duration: float = 1.0
 
 
 @dataclass
@@ -55,7 +56,7 @@ class Exercise:
 
     @property
     def length_beats(self) -> float:
-        return self.steps[-1].beat + self.beats_per_note if self.steps else 0.0
+        return self.steps[-1].beat + self.steps[-1].duration if self.steps else 0.0
 
 
 class TabError(ValueError):
@@ -84,7 +85,7 @@ def parse_tab(text: str, source: str = "") -> Exercise:
 
     tuning = tuple(parse_note(n) for n in meta["tuning"].split()) if "tuning" in meta else STANDARD_TUNING
     beats_per_note = float(meta.get("beats-per-note", 1))
-    steps: list[Step] = []
+    step_notes: list[tuple[tuple[int, int], ...]] = []
     for block in blocks:
         if len(block) != len(tuning):
             raise TabError(f"tab system has {len(block)} strings, tuning has {len(tuning)}")
@@ -95,7 +96,30 @@ def parse_tab(text: str, source: str = "") -> Exercise:
             for fret in _FRET_RE.finditer(content):
                 columns.setdefault(fret.start(), []).append((string, int(fret.group())))
         for column in sorted(columns):
-            steps.append(Step(len(steps) * beats_per_note, tuple(sorted(columns[column]))))
+            step_notes.append(tuple(sorted(columns[column])))
+    if "durations" in meta:
+        try:
+            durations = [float(value) for value in meta["durations"].split()]
+        except ValueError as error:
+            raise TabError("durations must be numbers") from error
+        if len(durations) != len(step_notes) or any(duration <= 0 for duration in durations):
+            raise TabError("durations must contain one positive value per step")
+    else:
+        durations = [beats_per_note] * len(step_notes)
+    if "beats" in meta:
+        try:
+            beats = [float(value) for value in meta["beats"].split()]
+        except ValueError as error:
+            raise TabError("beats must be numbers") from error
+        if len(beats) != len(step_notes) or any(beat < 0 for beat in beats):
+            raise TabError("beats must contain one non-negative value per step")
+    else:
+        beats = []
+        beat = 0.0
+        for duration in durations:
+            beats.append(beat)
+            beat += duration
+    steps = [Step(beat, notes, duration) for beat, notes, duration in zip(beats, step_notes, durations)]
     if not steps:
         raise TabError("no notes found")
     return Exercise(
@@ -115,8 +139,18 @@ def render_tab(exercise: Exercise, steps_per_line: int = 16) -> str:
     header = [f"# title: {exercise.title}", f"# bpm: {exercise.bpm}"]
     if exercise.tuning != STANDARD_TUNING:
         header.append("# tuning: " + " ".join(midi_name(m) for m in exercise.tuning))
-    if exercise.beats_per_note != 1:
-        header.append(f"# beats-per-note: {exercise.beats_per_note:g}")
+    durations = [step.duration for step in exercise.steps]
+    if durations and len(set(durations)) == 1 and durations[0] != 1:
+        header.append(f"# beats-per-note: {durations[0]:g}")
+    elif any(duration != 1 for duration in durations):
+        header.append("# durations: " + " ".join(f"{duration:g}" for duration in durations))
+    expected_beats = []
+    beat = 0.0
+    for duration in durations:
+        expected_beats.append(beat)
+        beat += duration
+    if any(actual != expected for actual, expected in zip((step.beat for step in exercise.steps), expected_beats)):
+        header.append("# beats: " + " ".join(f"{step.beat:g}" for step in exercise.steps))
     if exercise.description:
         header.append(f"# description: {exercise.description}")
     names = _string_labels(exercise.tuning)
@@ -156,14 +190,20 @@ def user_dir() -> Path:
 
 
 def load_library(extra_dirs: list[Path] | None = None) -> tuple[list[Exercise], list[str]]:
-    """Load every .tab file from the bundled and user folders. Returns (exercises, errors)."""
+    """Load supported exercise files from the bundled, user and extra folders."""
+    from .importers import GUITAR_PRO_SUFFIXES, MUSICXML_SUFFIXES, load_import
+
     exercises, errors = [], []
     for folder in [bundled_dir(), user_dir(), *(extra_dirs or [])]:
         if not folder.is_dir():
             continue
-        for path in sorted(folder.glob("*.tab")):
+        suffixes = {".tab"} | GUITAR_PRO_SUFFIXES | MUSICXML_SUFFIXES
+        for path in sorted(path for path in folder.iterdir() if path.suffix.lower() in suffixes):
             try:
-                exercises.append(load_tab_file(path))
-            except (TabError, ValueError, KeyError) as error:
+                if path.suffix.lower() == ".tab":
+                    exercises.append(load_tab_file(path))
+                else:
+                    exercises.extend(load_import(path))
+            except (ImportError, OSError, TabError, ValueError, KeyError) as error:
                 errors.append(f"{path.name}: {error}")
     return exercises, errors

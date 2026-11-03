@@ -10,8 +10,8 @@ and helps you build speed with a sample-accurate metronome.
   note is judged live (correct / out of tune / wrong / missed) and shown on a
   fretboard, with timing and accuracy at the end. At 90 % or better it suggests
   +5 BPM; under 60 % it tells you to slow down.
-- **Library**: bundled exercises, your own `.tab` files, and pasted ASCII tabs
-  from anywhere on the web.
+- **Library**: bundled exercises, your own `.tab` files, pasted ASCII tabs,
+  Guitar Pro `.gp3`/`.gp4`/`.gp5`, and MusicXML `.musicxml`/`.xml` files.
 - **Generator**: new exercises on the spot: scale runs (with 3- or 4-note
   groupings), random melodies in any key and scale, arpeggios, chromatic finger
   drills, and "find every C" fretboard drills.
@@ -53,7 +53,9 @@ E|---5-8---------------------|
 ```
 
 Rhythm is not read from dash spacing; each fret number column is one step of
-`beats-per-note` beats. Your files live in `~/.local/share/guitar-app/songs/`.
+`beats-per-note` beats. Imported uneven rhythms are stored with optional
+`# durations:` and `# beats:` headers. Your files live in
+`~/.local/share/guitar-app/songs/`.
 
 The app does not ship copyrighted songs. Import or paste tabs you have the
 right to use.
@@ -72,6 +74,7 @@ uv run pytest
 | `practice.py` | step windows and verdicts (pure, time passed in) |
 | `metronome.py` | sample-accurate click rendering, tap tempo |
 | `tabs.py` | tab parser, renderer, library loader |
+| `importers.py` | Guitar Pro and MusicXML import |
 | `generator.py` | exercise generators |
 | `audio.py` | microphone capture |
 | `widgets.py`, `ui.py` | Qt (PySide6) interface |

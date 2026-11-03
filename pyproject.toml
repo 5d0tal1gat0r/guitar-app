@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=2.0",
     "sounddevice>=0.5",
     "PySide6>=6.7",
+    "pyguitarpro>=0.11",
 ]
 
 [project.optional-dependencies]
