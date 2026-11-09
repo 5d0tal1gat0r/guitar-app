@@ -1087,8 +1087,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(shell)
         self._build_toolbar()
 
-        space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
-        space.activated.connect(self.on_space)
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        # One press, one action: a held Space must not re-click buttons or flap the metronome.
+        self.space_shortcut.setAutoRepeat(False)
+        self.space_shortcut.activated.connect(self.on_space)
         self.hub.status.connect(self.statusBar().showMessage)
         self.hub.frame.connect(lambda _pitch, level: self.level.set_level(level))
         self.current_route = ""

@@ -147,3 +147,7 @@ def test_narrow_window_keeps_rail_usable(window, app):
         assert _visible_inside(button, window), route
         assert button.accessibleName()
         assert button.toolTip() or button.text()
+
+
+def test_held_space_does_not_repeat(window):
+    assert window.space_shortcut.autoRepeat() is False
