@@ -16,9 +16,10 @@ Detection is monophonic: for a chord step, playing any one of its notes counts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
+from .metronome import MAX_BPM, MIN_BPM
 from .pitch import NoteReading
 from .tabs import Exercise, Step
 
@@ -149,3 +150,37 @@ class PracticeSession:
             missed=counts[Verdict.MISSED],
             mean_abs_timing_ms=sum(timings) / len(timings) if timings else None,
         )
+
+
+# A run at or above this accuracy earns a faster tempo; below BACK_OFF it slows down.
+SPEED_UP_AT = 0.9
+BACK_OFF_BELOW = 0.6
+
+
+def section(exercise: Exercise, first: int, last: int) -> Exercise:
+    """Steps `first`..`last` (inclusive, 0-based) as their own exercise starting at beat 0."""
+    count = len(exercise.steps)
+    if not 0 <= first <= last < count:
+        raise ValueError(f"steps {first + 1}–{last + 1} are outside 1–{count}")
+    if first == 0 and last == count - 1:
+        return exercise
+    origin = exercise.steps[first].beat
+    steps = [replace(step, beat=step.beat - origin) for step in exercise.steps[first:last + 1]]
+    if last + 1 < count:
+        # The last step keeps the room it had before the next original step.
+        end = exercise.steps[last + 1].beat - origin
+        steps[-1] = replace(steps[-1], duration=end - steps[-1].beat)
+    return replace(exercise, title=f"{exercise.title} · steps {first + 1}–{last + 1}", steps=steps)
+
+
+def next_tempo(bpm: float, accuracy: float, *, step: int = 5, target: float | None = None) -> int:
+    """Tempo for the next run of a loop: faster after a clean run, slower after a sloppy one."""
+    if accuracy >= SPEED_UP_AT:
+        new = bpm + step
+        if target is not None:
+            new = min(new, max(target, bpm))
+    elif accuracy < BACK_OFF_BELOW:
+        new = bpm - step
+    else:
+        new = bpm
+    return int(round(min(MAX_BPM, max(MIN_BPM, new))))
