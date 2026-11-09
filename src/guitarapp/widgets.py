@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from .practice import Verdict
+from .tabs import Exercise
+from .theme import PALETTE
 from .theory import STANDARD_TUNING, STRING_NAMES
 
-GREEN = QColor("#3fb950")
-AMBER = QColor("#d29922")
-RED = QColor("#f85149")
-GREY = QColor("#6e7681")
-BLUE = QColor("#58a6ff")
+# Deep tones of the theme accents: white text on them meets 4.5:1.
+GREEN = QColor(PALETTE["correct"])
+AMBER = QColor(PALETTE["tune"])
+RED = QColor(PALETTE["wrong"])
+GREY = QColor(PALETTE["missed"])
+BLUE = QColor(PALETTE["target"])
 
 VERDICT_COLORS = {
     Verdict.CORRECT: GREEN,
@@ -247,3 +250,148 @@ class StepStrip(QWidget):
                 p.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 6, 6)
             p.setPen(QColor("white") if verdict is not None else self.palette().text().color())
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.labels[index])
+
+
+class TabView(QWidget):
+    """The exercise as tablature that scrolls with play.
+
+    One column per step, high e on top. Played steps are coloured by verdict,
+    the current step sits in a highlighted band in the left third so the
+    upcoming notes stay visible, and the loop range is shaded.
+    Clicking a column emits `step_clicked(index, shift_held)`.
+    """
+
+    COLUMN = 34.0
+    LEFT = 26.0
+    step_clicked = Signal(int, bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.exercise: Exercise | None = None
+        self.verdicts: dict[int, Verdict] = {}
+        self.current: int | None = None
+        self.loop_range: tuple[int, int] | None = None
+        self.setMinimumHeight(150)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click a step to start the loop there; Shift+click to end it")
+
+    def sizeHint(self) -> QSize:
+        return QSize(600, 150)
+
+    def set_exercise(self, exercise: Exercise | None) -> None:
+        self.exercise = exercise
+        self.loop_range = None
+        self.reset()
+
+    def reset(self) -> None:
+        self.verdicts = {}
+        self.current = None
+        self.update()
+
+    def set_verdict(self, index: int, verdict: Verdict) -> None:
+        self.verdicts[index] = verdict
+        self.update()
+
+    def set_current(self, index: int | None) -> None:
+        self.current = index
+        self.update()
+
+    def set_range(self, first: int | None, last: int | None = None) -> None:
+        self.loop_range = None if first is None else (first, last if last is not None else first)
+        self.update()
+
+    def _first_visible(self) -> int:
+        if self.exercise is None or self.current is None:
+            return 0
+        visible = max(1, int((self.width() - self.LEFT) // self.COLUMN))
+        first = self.current - visible // 3
+        return max(0, min(first, len(self.exercise.steps) - visible))
+
+    def column_x(self, index: int) -> float:
+        return self.LEFT + (index - self._first_visible()) * self.COLUMN
+
+    def _string_y(self, string: int) -> float:
+        top, gap = 18.0, (self.height() - 18.0 - 40.0) / 5
+        return top + (5 - string) * gap
+
+    def mousePressEvent(self, event) -> None:
+        if self.exercise is None or event.button() != Qt.MouseButton.LeftButton:
+            return super().mousePressEvent(event)
+        index = self._first_visible() + int((event.position().x() - self.LEFT) // self.COLUMN)
+        if 0 <= index < len(self.exercise.steps) and event.position().x() >= self.LEFT:
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self.step_clicked.emit(index, shift)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        line = QColor(PALETTE["ink_soft"])
+        line.setAlpha(90)
+        ink = QColor(PALETTE["navy"])
+        soft = QColor(PALETTE["ink_soft"])
+        top, bottom = self._string_y(5), self._string_y(0)
+
+        p.setPen(QPen(line, 1))
+        for string in range(6):
+            y = self._string_y(string)
+            p.drawLine(QPointF(self.LEFT - 4, y), QPointF(self.width(), y))
+        small = QFont(self.font().family(), 8)
+        p.setFont(small)
+        p.setPen(soft)
+        for string in range(6):
+            y = self._string_y(string)
+            p.drawText(QRectF(0, y - 8, self.LEFT - 8, 16),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, STRING_NAMES[string])
+        exercise = self.exercise
+        if exercise is None:
+            return
+
+        first = self._first_visible()
+        last = min(len(exercise.steps), first + int((self.width() - self.LEFT) // self.COLUMN) + 1)
+        if self.loop_range is not None:
+            a, b = self.loop_range
+            x1 = max(self.LEFT, self.column_x(max(a, first)))
+            x2 = self.column_x(min(b, last - 1)) + self.COLUMN
+            if a < last and b >= first:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(PALETTE["sand"]))
+                p.drawRoundedRect(QRectF(x1, 4, x2 - x1, self.height() - 8), 8, 8)
+                p.setPen(QPen(QColor(PALETTE["honey"]), 3))
+                if first <= a < last:
+                    p.drawLine(QPointF(x1, 6), QPointF(x1, self.height() - 6))
+                if first <= b < last:
+                    p.drawLine(QPointF(x2, 6), QPointF(x2, self.height() - 6))
+        if self.current is not None and first <= self.current < last:
+            x = self.column_x(self.current)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(PALETTE["blue"]))
+            p.drawRoundedRect(QRectF(x + 2, top - 14, self.COLUMN - 4, bottom - top + 28), 8, 8)
+
+        bold = QFont(self.font().family(), 10)
+        bold.setBold(True)
+        for index in range(first, last):
+            step = exercise.steps[index]
+            x = self.column_x(index)
+            verdict = self.verdicts.get(index)
+            for string, fret in step.notes:
+                y = self._string_y(string)
+                cell = QRectF(x + 5, y - 10, self.COLUMN - 10, 20)
+                if verdict is not None:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(VERDICT_COLORS[verdict])
+                    p.drawRoundedRect(cell, 6, 6)
+                    p.setPen(QColor("white"))
+                else:
+                    # Knock the string line out behind the number.
+                    p.setPen(Qt.PenStyle.NoPen)
+                    in_loop = self.loop_range is not None and self.loop_range[0] <= index <= self.loop_range[1]
+                    backdrop = "blue" if index == self.current else "sand" if in_loop else "cream"
+                    p.setBrush(QColor(PALETTE[backdrop]))
+                    p.drawRect(cell.adjusted(3, 2, -3, -2))
+                    p.setPen(ink)
+                p.setFont(bold)
+                p.drawText(cell, Qt.AlignmentFlag.AlignCenter, str(fret))
+            p.setFont(small)
+            p.setPen(ink if index == self.current else soft)
+            p.drawText(QRectF(x, bottom + 16, self.COLUMN, 16), Qt.AlignmentFlag.AlignCenter, str(index + 1))

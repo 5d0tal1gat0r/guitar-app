@@ -23,10 +23,17 @@ PALETTE: dict[str, str] = {
     "blue": "#91ACD2",
     # Supporting tints derived from the roles above.
     "paper": "#FFFCF6",
+    "white": "#FFFFFF",
     "sand": "#F3E6CF",
     "line": "#E2D2B6",
     "ink_soft": "#4A586B",
     "navy_hover": "#2C3E55",
+    # Verdict and target tones for painted marks (white text on top).
+    "correct": "#3D7A3A",
+    "tune": "#A35F00",
+    "wrong": "#B8432D",
+    "missed": "#66707D",
+    "target": "#3E64A3",
 }
 
 # (text role, surface role) pairs that the stylesheet actually combines.
@@ -42,6 +49,11 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("navy", "blue"),
     ("cream", "navy"),
     ("cream", "navy_hover"),
+    ("white", "correct"),
+    ("white", "tune"),
+    ("white", "wrong"),
+    ("white", "missed"),
+    ("white", "target"),
 )
 
 
