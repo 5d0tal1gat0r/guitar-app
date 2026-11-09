@@ -43,3 +43,16 @@ def test_tempo_override_and_octave_option():
     s = PracticeSession(EXERCISE, start_time=0.0, bpm=120, ignore_octave=True)
     assert s.step_start(2) == 1.0
     assert s.on_note(0.0, note(57)).verdict is Verdict.CORRECT  # A3 for A2
+
+
+def test_windows_follow_next_step_and_last_duration():
+    exercise = parse_tab(
+        "# bpm: 60\n# durations: 0.5 1.5 0.25\n"
+        "e|-0---2-------3-|\nB|----------------|\nG|----------------|\n"
+        "D|----------------|\nA|----------------|\nE|----------------|\n"
+    )
+    session = PracticeSession(exercise, start_time=0.0)
+
+    assert session.step_end(0) == 0.5
+    assert session.step_end(1) == 2.0
+    assert session.step_end(2) == 2.25

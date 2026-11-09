@@ -10,8 +10,8 @@ and helps you build speed with a sample-accurate metronome.
   note is judged live (correct / out of tune / wrong / missed) and shown on a
   fretboard, with timing and accuracy at the end. At 90 % or better it suggests
   +5 BPM; under 60 % it tells you to slow down.
-- **Library**: bundled exercises, your own `.tab` files, and pasted ASCII tabs
-  from anywhere on the web.
+- **Library**: bundled exercises, your own `.tab` files, pasted ASCII tabs,
+  Guitar Pro `.gp3`/`.gp4`/`.gp5`, and MusicXML `.musicxml`/`.xml` files.
 - **Generator**: new exercises on the spot: scale runs (with 3- or 4-note
   groupings), random melodies in any key and scale, arpeggios, chromatic finger
   drills, and "find every C" fretboard drills.
@@ -20,6 +20,8 @@ and helps you build speed with a sample-accurate metronome.
   speed trainer that raises the tempo every N bars up to a target.
 - **Theory**: scales and chords in every key, interval names, step patterns,
   diatonic chords with Roman numerals, and the whole pattern on the fretboard.
+- **Progress**: local practice history, personal records and practice streaks.
+- **Quiz**: fretboard-note recognition by click or microphone, plus interval ear training.
 
 Detection is monophonic: play one note at a time. For a chord step, any one of
 its notes counts.
@@ -27,12 +29,17 @@ its notes counts.
 ## Install and run
 
 Needs Python 3.12+, [uv](https://docs.astral.sh/uv/) and PortAudio
-(`sudo pacman -S portaudio` on Arch).
+(`sudo pacman -S portaudio` on Arch, or `sudo apt install libportaudio2` on
+Debian/Ubuntu).
 
 ```bash
 uv sync
 uv run guitar-app
 ```
+
+The microphone is processed locally. The app has no account, telemetry or network service.
+Your imported exercises and practice history stay under
+`~/.local/share/guitar-app/` (or `$XDG_DATA_HOME/guitar-app/`).
 
 ## Tab format
 
@@ -53,7 +60,9 @@ E|---5-8---------------------|
 ```
 
 Rhythm is not read from dash spacing; each fret number column is one step of
-`beats-per-note` beats. Your files live in `~/.local/share/guitar-app/songs/`.
+`beats-per-note` beats. Imported uneven rhythms are stored with optional
+`# durations:` and `# beats:` headers. Your files live in
+`~/.local/share/guitar-app/songs/`.
 
 The app does not ship copyrighted songs. Import or paste tabs you have the
 right to use.
@@ -65,6 +74,10 @@ uv sync --extra dev
 uv run pytest
 ```
 
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). The project is currently
+an early Linux release: automated pitch and UI tests are in place, but audio latency and
+device behavior still vary by hardware.
+
 | Module | Purpose |
 | --- | --- |
 | `theory.py` | notes, frequencies, scales, chords, fretboard maps |
@@ -72,10 +85,14 @@ uv run pytest
 | `practice.py` | step windows and verdicts (pure, time passed in) |
 | `metronome.py` | sample-accurate click rendering, tap tempo |
 | `tabs.py` | tab parser, renderer, library loader |
+| `importers.py` | Guitar Pro and MusicXML import |
 | `generator.py` | exercise generators |
 | `audio.py` | microphone capture |
+| `history.py` | local practice sessions, records and streaks |
+| `quiz.py`, `trainer_ui.py` | fretboard and interval trainers |
 | `widgets.py`, `ui.py` | Qt (PySide6) interface |
 
 ## License
 
-MIT
+[MIT](LICENSE). The app does not include copyrighted songs; import only material you have
+the right to use.
