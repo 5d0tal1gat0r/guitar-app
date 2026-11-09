@@ -117,7 +117,7 @@ class Fretboard(QWidget):
         self.frets = frets
         self.tuning = tuning
         self.marks: list[FretMark] = []
-        self.setMinimumSize(560, 170)
+        self.setMinimumSize(560, 130)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
     def set_marks(self, marks: list[FretMark]) -> None:

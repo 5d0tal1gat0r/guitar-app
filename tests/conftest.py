@@ -1,6 +1,8 @@
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Force offscreen: desktop sessions often export QT_QPA_PLATFORM=wayland, and a
+# tiling compositor would then resize the windows the tests measure.
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 import pytest
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
 
 PALETTE: dict[str, str] = {
@@ -44,15 +45,62 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 
+_IMAGE_DIR = None
+
+
+
+def _check_mark_path() -> str:
+    """A painted check mark for checked check boxes, written once to a private temp folder."""
+    global _IMAGE_DIR
+    from PySide6.QtCore import QTemporaryDir
+
+    if _IMAGE_DIR is None:
+        _IMAGE_DIR = QTemporaryDir()
+    path = _IMAGE_DIR.filePath("check.png")
+    pixmap = QPixmap(32, 32)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(PALETTE["cream"]))
+    pen.setWidthF(4.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawPolyline(QPolygonF([QPointF(8, 17), QPointF(13.5, 22.5), QPointF(24, 10)]))
+    painter.end()
+    pixmap.save(path)
+    return path
+
+
 def application_stylesheet() -> str:
     p = PALETTE
+    # Painting the check mark needs a running application.
+    check = _check_mark_path() if QCoreApplication.instance() else ""
     return f"""
+QCheckBox::indicator, QGroupBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border: 2px solid {p["ink_soft"]};
+    border-radius: 5px;
+    background: {p["paper"]};
+}}
+QCheckBox::indicator:hover, QGroupBox::indicator:hover {{
+    border-color: {p["navy"]};
+}}
+QCheckBox::indicator:focus, QGroupBox::indicator:focus {{
+    border-color: {p["navy"]};
+}}
+QCheckBox::indicator:checked, QGroupBox::indicator:checked {{
+    background: {p["navy"]};
+    border-color: {p["navy"]};
+    image: url("{check}");
+}}
+QCheckBox::indicator:disabled {{
+    background: {p["sand"]};
+    border-color: {p["line"]};
+}}
 QMainWindow, QDialog {{
     background: {p["cream"]};
-}}
-QWidget {{
-    color: {p["navy"]};
-    font-size: 10.5pt;
 }}
 QWidget#Shell, QStackedWidget#Pages {{
     background: {p["cream"]};
@@ -104,6 +152,10 @@ QPushButton#NavButton:checked {{
     background: {p["cream"]};
     color: {p["navy"]};
 }}
+QPushButton#NavButton[compact="true"] {{
+    text-align: center;
+    padding: 8px 0;
+}}
 QPushButton#NavButton:focus {{
     border-color: {p["honey"]};
 }}
@@ -139,6 +191,9 @@ QPushButton#ActionCard[hero="true"] {{
 QPushButton#ActionCard[hero="true"]:hover {{
     border-color: {p["navy"]};
 }}
+QPushButton#ActionCard[hero="true"]:focus {{
+    border: 3px solid {p["navy"]};
+}}
 QPushButton#ActionCard[hero="true"] QLabel#CardTitle {{
     font-size: 20pt;
 }}
@@ -168,7 +223,7 @@ QToolBar {{
     background: {p["paper"]};
     border: none;
     border-bottom: 1px solid {p["line"]};
-    padding: 6px 10px;
+    padding: 3px 10px;
     spacing: 8px;
 }}
 
@@ -190,12 +245,12 @@ QPushButton:checked {{
 QPushButton:focus {{
     border: 2px solid {p["navy"]};
 }}
-QPushButton:disabled, QComboBox:disabled, QSpinBox:disabled, QLineEdit:disabled {{
+QPushButton:disabled, QLineEdit:disabled {{
     color: {p["ink_soft"]};
     background: {p["sand"]};
     border-color: {p["sand"]};
 }}
-QComboBox, QSpinBox, QLineEdit, QPlainTextEdit, QListWidget, QTableWidget {{
+QLineEdit, QPlainTextEdit, QListWidget, QTableWidget {{
     background: {p["paper"]};
     color: {p["navy"]};
     border: 1px solid {p["line"]};
@@ -204,14 +259,8 @@ QComboBox, QSpinBox, QLineEdit, QPlainTextEdit, QListWidget, QTableWidget {{
     selection-background-color: {p["blue"]};
     selection-color: {p["navy"]};
 }}
-QComboBox:focus, QSpinBox:focus, QLineEdit:focus, QPlainTextEdit:focus,
-QListWidget:focus, QTableWidget:focus {{
+QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus, QTableWidget:focus {{
     border: 2px solid {p["navy"]};
-}}
-QComboBox QAbstractItemView {{
-    background: {p["paper"]};
-    selection-background-color: {p["blue"]};
-    selection-color: {p["navy"]};
 }}
 QGroupBox {{
     border: 1px solid {p["line"]};
@@ -287,6 +336,8 @@ def application_palette() -> QPalette:
 
 
 def apply_theme(app) -> None:
+    # Combo boxes, spin boxes and check boxes keep native Fusion drawing in this
+    # palette; partial style sheets on them lose their arrows and indicators.
     app.setStyle("Fusion")
     app.setPalette(application_palette())
     app.setStyleSheet(application_stylesheet())

@@ -95,3 +95,17 @@ def test_refresh_picks_up_new_practice(app, tmp_path):
     history.add(SessionRecord(title="New song", when=datetime.now().isoformat(), bpm=60, total=4, correct=4))
     page.refresh()
     assert page.recent_label.full_text == "New song"
+
+
+def test_narrow_home_hides_small_card_descriptions(app, tmp_path):
+    page = HomePage(_history(tmp_path), library_loader=_loader(0))
+    page.resize(560, 500)
+    page.show()
+    app.processEvents()
+    hero, *tools = page.cards
+    assert hero.description_label.isVisible()
+    assert all(not card.description_label.isVisible() for card in tools)
+    assert all(card.toolTip() for card in tools)
+    page.resize(820, 640)
+    app.processEvents()
+    assert all(card.description_label.isVisible() for card in tools)

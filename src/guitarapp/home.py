@@ -27,6 +27,10 @@ HOME_ACTIONS: tuple[tuple[str, str, str, str, str], ...] = (
 )
 
 
+# Below this page width the small cards show title only.
+COMPACT_BELOW = 720
+
+
 def icon_tile(icon: str, accent: str, size: int) -> QPixmap:
     """The icon on a rounded tile of its accent colour."""
     pixmap = QPixmap(size, size)
@@ -97,8 +101,8 @@ class ActionCard(QPushButton):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(4)
         layout.addWidget(tile)
         if hero:
             layout.addStretch(1)
@@ -152,7 +156,7 @@ class HomePage(QWidget):
             self.cards.append(card)
 
         grid = QGridLayout()
-        grid.setSpacing(14)
+        grid.setSpacing(10)
         hero, tuner, metronome, theory, quiz, progress = self.cards
         grid.addWidget(hero, 0, 0, 3, 1)
         grid.addWidget(tuner, 0, 1)
@@ -168,13 +172,21 @@ class HomePage(QWidget):
             grid.setRowStretch(row, 1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(18)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(12)
         layout.addLayout(header)
         layout.addLayout(grid, 1)
 
         self.set_microphone_state(False)
         self.refresh()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Small cards cannot fit two wrapped lines at narrow widths; the
+        # description stays available as the card's tooltip and accessible description.
+        show = self.width() >= COMPACT_BELOW
+        for card in self.cards[1:]:
+            card.description_label.setVisible(show)
 
     def _build_summary(self) -> QWidget:
         panel = QWidget()

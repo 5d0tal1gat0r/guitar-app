@@ -56,3 +56,24 @@ def test_sdist_excludes_local_handoff(tmp_path: Path) -> None:
         and PurePosixPath(name).name == "HANDOFF.md"
     ]
     assert handoff_members == []
+
+
+def test_sdist_excludes_local_design_workspace(tmp_path: Path) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    workspace = repository / ".superpowers"
+    created_workspace = not workspace.exists()
+    workspace.mkdir(exist_ok=True)
+    sentinel = workspace / f"packaging-sentinel-{uuid.uuid4().hex}"
+    sentinel.touch()
+
+    try:
+        members = _build_sdist(repository, tmp_path)
+    finally:
+        sentinel.unlink(missing_ok=True)
+        if created_workspace:
+            workspace.rmdir()
+
+    workspace_members = [
+        name for name in members if ".superpowers" in PurePosixPath(name).parts
+    ]
+    assert workspace_members == []

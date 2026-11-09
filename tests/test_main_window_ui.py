@@ -107,3 +107,43 @@ def test_route_buttons_activate_from_keyboard(window):
     button.setFocus()
     QTest.keyClick(button, Qt.Key.Key_Space)
     assert window.current_route == "theory"
+
+
+def _settle(app, window) -> None:
+    """Let posted layout requests run; offscreen resizes lag behind otherwise."""
+    for _ in range(3):
+        QTest.qWait(10)
+        app.processEvents()
+
+
+def _visible_inside(widget, window) -> bool:
+    if not widget.isVisible() or widget.width() <= 0 or widget.height() <= 0:
+        return False
+    top_left = widget.mapTo(window, widget.rect().topLeft())
+    bottom_right = widget.mapTo(window, widget.rect().bottomRight())
+    return window.rect().contains(top_left) and window.rect().contains(bottom_right)
+
+
+@pytest.mark.parametrize("size", [(1000, 720), (760, 600)])
+def test_shell_fits_without_clipping(window, app, size):
+    window.resize(*size)
+    _settle(app, window)
+    assert (window.width(), window.height()) == size
+    for widget in (window.stack, window.route_buttons["home"], window.listen, window.device,
+                   window.home_page.mic_label, *window.home_page.cards):
+        assert _visible_inside(widget, window), widget
+    for route, page in window.pages.items():
+        window.show_route(route)
+        _settle(app, window)
+        hint = page.minimumSizeHint()
+        assert hint.width() <= window.stack.contentsRect().width(), (route, hint)
+        assert hint.height() <= window.stack.contentsRect().height(), (route, hint)
+
+
+def test_narrow_window_keeps_rail_usable(window, app):
+    window.resize(760, 600)
+    _settle(app, window)
+    for route, button in window.route_buttons.items():
+        assert _visible_inside(button, window), route
+        assert button.accessibleName()
+        assert button.toolTip() or button.text()

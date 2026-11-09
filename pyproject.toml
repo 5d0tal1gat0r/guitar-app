@@ -43,7 +43,7 @@ build-backend = "hatchling.build"
 packages = ["src/guitarapp"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["/.worktrees", "/.worktrees/**", "/HANDOFF.md"]
+exclude = ["/.worktrees", "/.worktrees/**", "/.superpowers", "/.superpowers/**", "/HANDOFF.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
