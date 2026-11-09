@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
 
 PALETTE: dict[str, str] = {
     # Approved roles.
@@ -106,6 +106,12 @@ QPushButton#NavButton:checked {{
 }}
 QPushButton#NavButton:focus {{
     border-color: {p["honey"]};
+}}
+QToolTip {{
+    background: {p["navy"]};
+    color: {p["cream"]};
+    border: none;
+    padding: 4px 8px;
 }}
 
 /* Home action cards */
@@ -259,6 +265,33 @@ QStatusBar {{
 """
 
 
+def application_palette() -> QPalette:
+    """Light palette so custom-painted widgets read well whatever the desktop theme is."""
+    p = {role: QColor(value) for role, value in PALETTE.items()}
+    palette = QPalette()
+    roles = QPalette.ColorRole
+    for role, color in (
+        (roles.Window, p["cream"]), (roles.WindowText, p["navy"]),
+        (roles.Base, p["paper"]), (roles.AlternateBase, p["sand"]),
+        (roles.Text, p["navy"]), (roles.PlaceholderText, p["ink_soft"]),
+        (roles.Button, p["paper"]), (roles.ButtonText, p["navy"]),
+        (roles.ToolTipBase, p["navy"]), (roles.ToolTipText, p["cream"]),
+        (roles.Highlight, p["blue"]), (roles.HighlightedText, p["navy"]),
+        (roles.Mid, p["line"]), (roles.Midlight, p["sand"]),
+    ):
+        palette.setColor(role, color)
+    palette.setColor(QPalette.ColorGroup.Disabled, roles.Text, p["ink_soft"])
+    palette.setColor(QPalette.ColorGroup.Disabled, roles.ButtonText, p["ink_soft"])
+    palette.setColor(QPalette.ColorGroup.Disabled, roles.WindowText, p["ink_soft"])
+    return palette
+
+
+def apply_theme(app) -> None:
+    app.setStyle("Fusion")
+    app.setPalette(application_palette())
+    app.setStyleSheet(application_stylesheet())
+
+
 # ----------------------------------------------------------------- Icons
 
 def _home(p: QPainter) -> None:
@@ -368,5 +401,11 @@ def tool_pixmap(name: str, size: int = 48, color: str | None = None) -> QPixmap:
     return pixmap
 
 
-def tool_icon(name: str, size: int = 48, color: str | None = None) -> QIcon:
-    return QIcon(tool_pixmap(name, size, color))
+def tool_icon(name: str, size: int = 48, color: str | None = None,
+              checked_color: str | None = None) -> QIcon:
+    """Icon for `name`; `checked_color` paints a second variant for checked buttons."""
+    icon = QIcon(tool_pixmap(name, size, color))
+    if checked_color is not None:
+        icon.addPixmap(tool_pixmap(name, size, checked_color), QIcon.Mode.Normal, QIcon.State.On)
+        icon.addPixmap(tool_pixmap(name, size, checked_color), QIcon.Mode.Active, QIcon.State.On)
+    return icon
