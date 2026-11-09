@@ -1,4 +1,4 @@
-"""Custom-painted widgets: cents meter, fretboard, step strip, level meter."""
+"""Custom-painted widgets: cents meter, fretboard, scrolling tab view, level meter."""
 
 from __future__ import annotations
 
@@ -197,61 +197,6 @@ class Fretboard(QWidget):
                        Qt.AlignmentFlag.AlignCenter, mark.label)
 
 
-class StepStrip(QWidget):
-    """One cell per exercise step, coloured by verdict; the current step is outlined."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.labels: list[str] = []
-        self.verdicts: dict[int, Verdict] = {}
-        self.current: int | None = None
-        self.setMinimumHeight(44)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def set_steps(self, labels: list[str]) -> None:
-        self.labels = labels
-        self.verdicts = {}
-        self.current = None
-        self.update()
-
-    def set_verdict(self, index: int, verdict: Verdict) -> None:
-        self.verdicts[index] = verdict
-        self.update()
-
-    def set_current(self, index: int | None) -> None:
-        self.current = index
-        self.update()
-
-    def paintEvent(self, _event) -> None:
-        if not self.labels:
-            return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cell = 46.0
-        visible = max(1, int(self.width() // cell))
-        # Keep the current step in view: scroll in pages.
-        first = 0
-        if self.current is not None:
-            first = (self.current // visible) * visible
-        p.setFont(QFont(self.font().family(), 8))
-        for slot, index in enumerate(range(first, min(len(self.labels), first + visible))):
-            rect = QRectF(slot * cell + 2, 4, cell - 4, self.height() - 8)
-            verdict = self.verdicts.get(index)
-            if verdict is not None:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(VERDICT_COLORS[verdict])
-            else:
-                p.setPen(QPen(_muted(self, 70), 1))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(rect, 5, 5)
-            if index == self.current:
-                p.setPen(QPen(BLUE, 3))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 6, 6)
-            p.setPen(QColor("white") if verdict is not None else self.palette().text().color())
-            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.labels[index])
-
-
 class TabView(QWidget):
     """The exercise as tablature that scrolls with play.
 
@@ -271,8 +216,8 @@ class TabView(QWidget):
         self.verdicts: dict[int, Verdict] = {}
         self.current: int | None = None
         self.loop_range: tuple[int, int] | None = None
-        self.setMinimumHeight(150)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(118)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("Click a step to start the loop there; Shift+click to end it")
 
@@ -312,7 +257,7 @@ class TabView(QWidget):
         return self.LEFT + (index - self._first_visible()) * self.COLUMN
 
     def _string_y(self, string: int) -> float:
-        top, gap = 18.0, (self.height() - 18.0 - 40.0) / 5
+        top, gap = 16.0, (self.height() - 16.0 - 34.0) / 5
         return top + (5 - string) * gap
 
     def mousePressEvent(self, event) -> None:
@@ -394,4 +339,4 @@ class TabView(QWidget):
                 p.drawText(cell, Qt.AlignmentFlag.AlignCenter, str(fret))
             p.setFont(small)
             p.setPen(ink if index == self.current else soft)
-            p.drawText(QRectF(x, bottom + 16, self.COLUMN, 16), Qt.AlignmentFlag.AlignCenter, str(index + 1))
+            p.drawText(QRectF(x, bottom + 14, self.COLUMN, 16), Qt.AlignmentFlag.AlignCenter, str(index + 1))

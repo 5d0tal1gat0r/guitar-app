@@ -13,7 +13,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QInputDialog, QMessageBox, QPlainTextEdit, QPushButton, QSlider, QSpinBox, QSplitter, QTabWidget,
+    QInputDialog, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSlider, QSpinBox, QSplitter, QTabWidget,
     QStackedWidget, QToolBar, QVBoxLayout, QWidget, QAbstractButton,
 )
 
@@ -21,10 +21,10 @@ from . import generator
 from .audio import MicInput, input_devices
 from .importers import load_import
 from .history import History, SessionRecord
-from .home import HomePage
+from .home import ElidedLabel, HomePage, icon_tile
 from .metronome import MAX_BPM, MIN_BPM, Metronome, TapTempo
 from .pitch import NoteReading, NoteTracker, Pitch, detect_pitch, reading_from_freq, rms
-from .practice import PracticeSession, StepResult, Verdict
+from .practice import BACK_OFF_BELOW, SPEED_UP_AT, PracticeSession, StepResult, Verdict, next_tempo, section
 from .theme import PALETTE, apply_theme, tool_icon
 from .tabs import Exercise, TabError, load_library, parse_tab, render_tab, user_dir
 from .trainer_ui import ProgressPage, QuizPage
@@ -32,7 +32,7 @@ from .theory import (
     CHORDS, NOTE_NAMES, SCALES, STANDARD_TUNING, STRING_NAMES, chord_pitch_classes,
     diatonic_triads, fret_for_midi, fret_positions, interval_name, midi_name, scale_pitch_classes,
 )
-from .widgets import BLUE, GREEN, GREY, RED, VERDICT_COLORS, CentsMeter, Fretboard, FretMark, LevelMeter, StepStrip
+from .widgets import BLUE, GREEN, GREY, RED, VERDICT_COLORS, CentsMeter, Fretboard, FretMark, LevelMeter, TabView
 
 SAMPLE_RATE = 44100
 # Highest note analysed. Guitar fret 19 on high e is B5 (988 Hz).
@@ -56,6 +56,11 @@ SCALE_NOTES = {
     "mixolydian": "Major with a flat 7th. Sounds like a dominant 7 chord; common in blues and rock.",
     "chromatic": "All twelve notes. Used here for finger and picking technique.",
 }
+
+# Pause between runs of a loop, so the player can breathe and see the score.
+LOOP_PAUSE_MS = 1500
+# Height the live view needs to show the fretboard below the target cards and tab.
+FRETBOARD_NEEDS = 400
 
 ROMAN = ("I", "II", "III", "IV", "V", "VI", "VII")
 
@@ -379,49 +384,222 @@ class MetronomePage(QWidget):
 # ------------------------------------------------------------------ Practice
 
 class PracticePage(QWidget):
+    """Play an exercise against the microphone: live target, scrolling tab, results, loops."""
+
+    library_requested = Signal()
+
     def __init__(self, hub: AudioHub, metronome: Metronome, history: History):
         super().__init__()
         self.hub = hub
         self.metronome = metronome
         self.history = history
+        self.clock = time.monotonic  # replaced in tests
         self.exercise: Exercise | None = None
         self.session: PracticeSession | None = None
+        self.offset = 0  # index of the session's first step inside the full exercise
+        self.runs = 0  # runs finished in the current loop
         self._started_metronome = False
         self._last_played: tuple[NoteReading, Verdict] | None = None
+        self._restart = QTimer(self)
+        self._restart.setSingleShot(True)
+        self._restart.setInterval(LOOP_PAUSE_MS)
+        self._restart.timeout.connect(self._loop_again)
 
-        self.title = QLabel("Pick an exercise in the Library, or generate one")
-        self.title.setFont(big_font(15))
-        self.description = QLabel("")
-        self.description.setWordWrap(True)
-        color_label(self.description, GREY)
+        eyebrow = QLabel("PRACTICE")
+        eyebrow.setObjectName("Eyebrow")
+        self.title = ElidedLabel("")
+        self.title.setObjectName("SectionTitle")
         self.record = QLabel("")
-        color_label(self.record, GREY)
+        self.record.setObjectName("Muted")
+        self.description = QLabel("")
+        self.description.setObjectName("Muted")
+        self.description.setWordWrap(True)
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        header.addWidget(eyebrow)
+        header.addWidget(self.title)
+        meta = QHBoxLayout()
+        meta.addWidget(self.record)
+        meta.addStretch(1)
+        header.addLayout(meta)
 
+        self.views = QStackedWidget()
+        self.empty_view = self._build_empty()
+        self.live_view = self._build_live()
+        self.results_view = self._build_results()
+        for view in (self.empty_view, self.live_view, self.results_view):
+            self.views.addWidget(view)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addLayout(header)
+        layout.addWidget(self.views, 1)
+        self.controls = self._build_controls()
+        layout.addWidget(self.controls)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(15)
+        self._timer.timeout.connect(self._tick)
+        hub.note.connect(self.on_note)
+        hub.frame.connect(self.on_frame)
+        self.views.setCurrentWidget(self.empty_view)
+        self.controls.hide()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # A squashed neck is unreadable; on short windows the tab alone shows where to play.
+        self.fretboard.setVisible(self.views.height() >= FRETBOARD_NEEDS)
+
+    # ------------------------------------------------------------ building
+
+    def _build_empty(self) -> QWidget:
+        view = QWidget()
+        tile = QLabel()
+        tile.setPixmap(icon_tile("library", "peach", 72))
+        tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        heading = QLabel("Pick something to play")
+        heading.setObjectName("SectionTitle")
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body = QLabel("Choose a song or exercise in the Library, or generate one. It opens here.")
+        body.setObjectName("Muted")
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        button = QPushButton("Open Library")
+        button.setObjectName("Primary")
+        button.clicked.connect(self.library_requested.emit)
+        column = QVBoxLayout(view)
+        column.addStretch(1)
+        column.addWidget(tile)
+        column.addWidget(heading)
+        column.addWidget(body)
+        column.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
+        column.addStretch(1)
+        return view
+
+    def _build_live(self) -> QWidget:
+        view = QWidget()
+        target_card = QWidget()
+        target_card.setObjectName("Card")
+        target_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        play = QLabel("PLAY")
+        play.setObjectName("Eyebrow")
         self.target = QLabel("–")
-        self.target.setFont(big_font(48))
+        self.target.setFont(big_font(34))
         self.position = QLabel(" ")
-        self.feedback = QLabel(" ")
-        self.feedback.setFont(big_font(15))
-        target_box = QVBoxLayout()
-        target_box.addWidget(QLabel("Play"))
-        target_box.addWidget(self.target)
-        target_box.addWidget(self.position)
-        target_box.addWidget(self.feedback)
+        self.position.setObjectName("Muted")
+        self.feedback = QLabel("Ready")
+        self.feedback.setObjectName("Chip")
+        target_box = QGridLayout(target_card)
+        target_box.setContentsMargins(14, 8, 14, 10)
+        target_box.setVerticalSpacing(0)
+        target_box.addWidget(play, 0, 0)
+        target_box.addWidget(self.target, 1, 0)
+        target_box.addWidget(self.position, 2, 0)
+        target_box.addWidget(self.feedback, 1, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        target_box.setColumnStretch(0, 1)
 
+        side_card = QWidget()
+        side_card.setObjectName("SummaryPanel")
+        side_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        hearing = QLabel("HEARING")
+        hearing.setObjectName("Eyebrow")
         self.heard = QLabel("–")
-        self.heard.setFont(big_font(28, bold=False))
-        heard_box = QVBoxLayout()
-        heard_box.addWidget(QLabel("Hearing"))
-        heard_box.addWidget(self.heard)
-        heard_box.addStretch(1)
+        self.heard.setFont(big_font(22))
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(8)
+        self.score = QLabel(" ")
+        self.score.setObjectName("Muted")
+        side = QVBoxLayout(side_card)
+        side.setContentsMargins(14, 8, 14, 10)
+        side.setSpacing(2)
+        side.addWidget(hearing)
+        side.addWidget(self.heard)
+        side.addStretch(1)
+        side.addWidget(self.progress)
+        side.addWidget(self.score)
 
         top = QHBoxLayout()
-        top.addLayout(target_box, 2)
-        top.addLayout(heard_box, 1)
+        top.setSpacing(10)
+        top.addWidget(target_card, 3)
+        top.addWidget(side_card, 2)
 
+        self.tab = TabView()
+        self.tab.step_clicked.connect(self._on_step_clicked)
         self.fretboard = Fretboard(frets=15)
-        self.strip = StepStrip()
 
+        column = QVBoxLayout(view)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(8)
+        column.addLayout(top)
+        column.addWidget(self.tab)
+        column.addWidget(self.fretboard, 1)
+        return view
+
+    def _build_results(self) -> QWidget:
+        view = QWidget()
+        card = QWidget()
+        card.setObjectName("Card")
+        card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        done = QLabel("RUN COMPLETE")
+        done.setObjectName("Eyebrow")
+        self.result_score = QLabel("–")
+        self.result_score.setObjectName("Score")
+        self.result_caption = QLabel(" ")
+        self.result_caption.setObjectName("SectionTitle")
+        self.result_caption.setWordWrap(True)
+        self.result_chips: dict[Verdict, QLabel] = {}
+        chips = QHBoxLayout()
+        for verdict in Verdict:
+            chip = QLabel()
+            chip.setObjectName("Chip")
+            chip.setProperty("verdict", verdict.value)
+            self.result_chips[verdict] = chip
+            chips.addWidget(chip)
+        chips.addStretch(1)
+        self.result_detail = QLabel(" ")
+        self.result_detail.setObjectName("Muted")
+        self.result_detail.setWordWrap(True)
+        self.result_tab = TabView()
+        self.result_tab.setToolTip("Every step of the run, coloured by result")
+        self.result_tab.step_clicked.connect(self._on_step_clicked)
+        self.again_button = QPushButton("Play again")
+        self.again_button.clicked.connect(self.start)
+        self.suggested_button = QPushButton("Again at – BPM")
+        self.suggested_button.setObjectName("Primary")
+        self.suggested_button.clicked.connect(self._start_suggested)
+        self.suggested_bpm: int | None = None
+        library = QPushButton("Choose another")
+        library.clicked.connect(self.library_requested.emit)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.suggested_button)
+        buttons.addWidget(self.again_button)
+        buttons.addStretch(1)
+        buttons.addWidget(library)
+
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(22, 16, 22, 18)
+        inner.setSpacing(6)
+        inner.addWidget(done)
+        score_row = QHBoxLayout()
+        score_row.addWidget(self.result_score)
+        score_row.addWidget(self.result_caption, 1)
+        inner.addLayout(score_row)
+        inner.addLayout(chips)
+        inner.addWidget(self.result_detail)
+        inner.addSpacing(6)
+        inner.addWidget(self.result_tab)
+        inner.addStretch(1)
+        inner.addLayout(buttons)
+        column = QVBoxLayout(view)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.addWidget(card)
+        return view
+
+    def _build_controls(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("SummaryPanel")
+        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.bpm = QSpinBox()
         self.bpm.setRange(MIN_BPM, MAX_BPM)
         self.bpm.setSuffix(" BPM")
@@ -435,64 +613,154 @@ class PracticePage(QWidget):
         self.click = QCheckBox("Click")
         self.click.setChecked(True)
         self.click.setToolTip("Play the metronome during the exercise (one bar count-in)")
+
+        self.first_step = QSpinBox()
+        self.last_step = QSpinBox()
+        for box in (self.first_step, self.last_step):
+            box.setRange(1, 1)
+            box.valueChanged.connect(self._on_range_changed)
+        self.first_step.setToolTip("First step of the section to play (or click the tab)")
+        self.last_step.setToolTip("Last step of the section to play (or Shift+click the tab)")
+        self.loop = QCheckBox("Loop")
+        self.loop.setToolTip("Repeat the section until you press Stop")
+        self.adapt = QCheckBox("Adapt")
+        self.adapt.setToolTip(
+            f"Each run: {SPEED_UP_AT:.0%}+ correct speeds up, under {BACK_OFF_BELOW:.0%} slows down")
+        self.tempo_step = QSpinBox()
+        self.tempo_step.setRange(1, 20)
+        self.tempo_step.setValue(5)
+        self.tempo_step.setPrefix("±")
+        self.tempo_step.setToolTip("How much the tempo changes between runs")
+        self.goal = QSpinBox()
+        self.goal.setRange(MIN_BPM, MAX_BPM)
+        self.goal.setValue(MAX_BPM)
+        self.goal.setPrefix("max ")
+        self.goal.setToolTip("Stop speeding up at this tempo")
+
         self.start_button = QPushButton("Start")
+        self.start_button.setObjectName("Primary")
         self.start_button.setFont(big_font(13))
-        self.start_button.setMinimumHeight(40)
+        self.start_button.setMinimumSize(96, 40)
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self.toggle)
-        controls = QHBoxLayout()
-        for widget in (QLabel("Tempo"), self.bpm, QLabel("Tolerance"), self.tolerance, self.ignore_octave, self.click):
-            controls.addWidget(widget)
-        controls.addStretch(1)
-        controls.addWidget(self.start_button)
 
-        self.result = QLabel(" ")
-        self.result.setWordWrap(True)
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(12, 8, 12, 8)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        def row(*groups):
+            line = QHBoxLayout()
+            line.setSpacing(4)
+            for number, group in enumerate(groups):
+                if number:
+                    line.addSpacing(12)
+                for widget in group:
+                    line.addWidget(widget)
+            line.addStretch(1)
+            return line
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.title)
-        layout.addWidget(self.description)
-        layout.addWidget(self.record)
-        layout.addSpacing(6)
-        layout.addLayout(top)
-        layout.addWidget(self.fretboard, 1)
-        layout.addWidget(self.strip)
-        layout.addWidget(self.result)
-        layout.addLayout(controls)
+        row1 = row((QLabel("Tempo"), self.bpm), (QLabel("Tolerance"), self.tolerance),
+                   (self.ignore_octave,), (self.click,))
+        row2 = row((QLabel("Steps"), self.first_step, QLabel("to"), self.last_step), (self.loop,),
+                   (self.adapt, self.tempo_step, self.goal))
+        grid.addLayout(row1, 0, 0)
+        grid.addLayout(row2, 1, 0)
+        grid.addWidget(self.start_button, 0, 1, 2, 1, Qt.AlignmentFlag.AlignVCenter)
+        grid.setColumnStretch(0, 1)
+        self.adapt.toggled.connect(self._update_adapt_fields)
+        self._update_adapt_fields()
+        return panel
 
-        self._timer = QTimer(self)
-        self._timer.setInterval(15)
-        self._timer.timeout.connect(self._tick)
-        hub.note.connect(self.on_note)
-        hub.frame.connect(self.on_frame)
+    # ------------------------------------------------------------ state
 
     def load(self, exercise: Exercise) -> None:
         self.stop()
         self.exercise = exercise
-        self.title.setText(exercise.title)
+        self.title.set_full_text(exercise.title)
         self.description.setText(exercise.description)
         self._show_record()
         self.bpm.setValue(exercise.bpm)
-        self.strip.set_steps([" ".join(midi_name(m) for m in exercise.midi_notes(s)) for s in exercise.steps])
+        count = len(exercise.steps)
+        for box in (self.first_step, self.last_step):
+            box.blockSignals(True)
+            box.setRange(1, count)
+            box.blockSignals(False)
+        self.first_step.setValue(1)
+        self.last_step.setValue(count)
+        self.tab.set_exercise(exercise)
         self.start_button.setEnabled(True)
-        self.result.setText(f"{len(exercise.steps)} notes. Press Start; a one-bar count-in comes first.")
-        color_label(self.result, None)
+        self.controls.show()
+        self.views.setCurrentWidget(self.live_view)
+        self._set_feedback("Ready", None)
+        self.position.setText(f"{count} notes · a one-bar count-in comes first")
+        self.score.setText(" ")
+        self.progress.setValue(0)
         self._show_step(0)
+
+    def selected_range(self) -> tuple[int, int]:
+        """The 0-based inclusive step range the next run plays."""
+        return self.first_step.value() - 1, self.last_step.value() - 1
+
+    def _on_range_changed(self, _value: int) -> None:
+        if self.exercise is None:
+            return
+        first, last = self.selected_range()
+        if last < first:
+            other = self.last_step if self.sender() is self.first_step else self.first_step
+            other.blockSignals(True)
+            other.setValue(self.first_step.value() if other is self.last_step else self.last_step.value())
+            other.blockSignals(False)
+            first, last = self.selected_range()
+        full = (first, last) == (0, len(self.exercise.steps) - 1)
+        self.tab.set_range(None if full else first, last)
+        if self.session is None:
+            self._show_step(first)
+
+    def _on_step_clicked(self, index: int, shift: bool) -> None:
+        if self.session is not None:
+            return
+        if shift:
+            self.last_step.setValue(index + 1)
+        else:
+            self.first_step.setValue(index + 1)
+            if self.last_step.value() < index + 1:
+                self.last_step.setValue(index + 1)
+
+    def _update_adapt_fields(self) -> None:
+        for widget in (self.tempo_step, self.goal):
+            widget.setEnabled(self.adapt.isChecked())
 
     def _show_record(self) -> None:
         stats = self.history.stats(self.exercise.title) if self.exercise else None
         if stats is None:
             self.record.setText("Not played yet")
             return
-        clean = f", fastest clean run {stats.best_clean_bpm:.0f} BPM" if stats.best_clean_bpm else ""
-        self.record.setText(f"Played {stats.sessions}×, best {stats.best_accuracy:.0%}{clean}")
+        clean = f" · fastest clean run {stats.best_clean_bpm:.0f} BPM" if stats.best_clean_bpm else ""
+        self.record.setText(f"Played {stats.sessions}× · best {stats.best_accuracy:.0%}{clean}")
+
+    def _set_feedback(self, text: str, verdict: Verdict | None) -> None:
+        self.feedback.setText(text)
+        self.feedback.setProperty("verdict", verdict.value if verdict else "")
+        self.feedback.style().unpolish(self.feedback)
+        self.feedback.style().polish(self.feedback)
+
+    # ------------------------------------------------------------ running
 
     def toggle(self) -> None:
-        if self.session is None:
+        if self.session is None and not self._restart.isActive():
             self.start()
         else:
+            looping = self.runs > 0
             self.stop()
-            self.result.setText("Stopped.")
+            if looping and self.views.currentWidget() is self.live_view:
+                self._set_feedback(f"Stopped after {self.runs} run{'s' if self.runs != 1 else ''}", None)
+            else:
+                self._set_feedback("Stopped", None)
+
+    def _start_suggested(self) -> None:
+        if self.suggested_bpm is not None:
+            self.bpm.setValue(self.suggested_bpm)
+        self.start()
 
     def start(self) -> None:
         if self.exercise is None:
@@ -500,9 +768,12 @@ class PracticePage(QWidget):
         if not self.hub.running and not self.hub.start():
             QMessageBox.warning(self, "Microphone", "The microphone could not be opened. Check the input device in the toolbar.")
             return
+        first, last = self.selected_range()
+        exercise = section(self.exercise, first, last)
+        self.offset = first
         bpm = self.bpm.value()
         beats_per_bar = 4
-        origin = time.monotonic()
+        origin = self.clock()
         if self.click.isChecked():
             if self.metronome.running:
                 self.metronome.stop()
@@ -511,31 +782,40 @@ class PracticePage(QWidget):
             try:
                 self.metronome.start()
                 self._started_metronome = True
-                origin = time.monotonic() + self.metronome.output_latency()
+                origin = self.clock() + self.metronome.output_latency()
             except Exception as error:
-                self.result.setText(f"No click: audio output failed ({error}).")
+                self.position.setText(f"No click: audio output failed ({error}).")
         self.session = PracticeSession(
-            self.exercise,
+            exercise,
             start_time=origin + beats_per_bar * 60.0 / bpm,
             bpm=bpm,
             tolerance_cents=self.tolerance.value(),
             ignore_octave=self.ignore_octave.isChecked(),
         )
-        self.strip.set_steps(self.strip.labels)
+        self.tab.reset()
+        self.tab.set_range(*((first, last) if exercise is not self.exercise else (None,)))
+        self.progress.setRange(0, len(exercise.steps))
+        self.progress.setValue(0)
+        self.score.setText(f"Run {self.runs + 1} · {bpm} BPM" if self.loop.isChecked() else f"{bpm} BPM")
         self._last_played = None
-        self.feedback.setText("Count-in…")
-        color_label(self.feedback, GREY)
-        self.result.setText(" ")
+        self._set_feedback("Count-in", None)
+        self.views.setCurrentWidget(self.live_view)
         self.start_button.setText("Stop")
+        for widget in (self.bpm, self.first_step, self.last_step):
+            widget.setEnabled(False)
         self._timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
+        self._restart.stop()
         self.session = None
+        self.runs = 0
         if self._started_metronome:
             self.metronome.stop()
             self._started_metronome = False
         self.start_button.setText("Start")
+        for widget in (self.bpm, self.first_step, self.last_step):
+            widget.setEnabled(True)
 
     def on_frame(self, pitch: Pitch | None, _level: float) -> None:
         if self.isVisible():
@@ -544,7 +824,7 @@ class PracticePage(QWidget):
     def on_note(self, reading: NoteReading) -> None:
         if self.session is None:
             return
-        result = self.session.on_note(time.monotonic(), reading)
+        result = self.session.on_note(self.clock(), reading)
         if result is not None:
             self._show_result(result)
 
@@ -552,21 +832,30 @@ class PracticePage(QWidget):
         session = self.session
         if session is None:
             return
-        now = time.monotonic()
+        now = self.clock()
         for result in session.advance(now):
             if result.verdict is Verdict.MISSED:
                 self._show_result(result)
+            self._update_score(session)
         if session.finished:
             self._finish()
             return
         index = len(session.results)
         if now >= session.step_start(0) - session.early:
-            self._show_step(index)
-            if self.feedback.text() == "Count-in…":
-                self.feedback.setText(" ")
+            self._show_step(self.offset + index)
+            if self.feedback.text() == "Count-in":
+                self._set_feedback("Play", None)
         else:
             beats_left = int((session.step_start(0) - now) / session.seconds_per_beat) + 1
-            self.position.setText(f"Starting in {beats_left}")
+            self.target.setText(str(beats_left))
+            self.position.setText("Count-in · get ready")
+
+    def _update_score(self, session: PracticeSession) -> None:
+        done = len(session.results)
+        correct = sum(1 for r in session.results if r.verdict is Verdict.CORRECT)
+        self.progress.setValue(done)
+        run = f"Run {self.runs + 1} · " if self.loop.isChecked() else ""
+        self.score.setText(f"{run}{correct}/{done} correct · {session.bpm:.0f} BPM")
 
     def _show_step(self, index: int) -> None:
         exercise = self.exercise
@@ -575,7 +864,7 @@ class PracticePage(QWidget):
         step = exercise.steps[index]
         self.target.setText(" + ".join(midi_name(m) for m in exercise.midi_notes(step)))
         self.position.setText(position_text(exercise, step.notes))
-        self.strip.set_current(index)
+        self.tab.set_current(index)
         marks = []
         if index + 1 < len(exercise.steps):
             for string, fret in exercise.steps[index + 1].notes:
@@ -592,7 +881,7 @@ class PracticePage(QWidget):
         self.fretboard.set_marks(marks)
 
     def _show_result(self, result: StepResult) -> None:
-        self.strip.set_verdict(result.index, result.verdict)
+        self.tab.set_verdict(self.offset + result.index, result.verdict)
         text = VERDICT_TEXT[result.verdict]
         if result.played is not None:
             if result.verdict is Verdict.WRONG:
@@ -600,14 +889,14 @@ class PracticePage(QWidget):
             elif result.verdict is Verdict.OUT_OF_TUNE:
                 text += f" ({result.played.cents:+.0f} cents)"
             self._last_played = (result.played, result.verdict)
-        self.feedback.setText(text)
-        color_label(self.feedback, VERDICT_COLORS[result.verdict])
+        self._set_feedback(text, result.verdict)
 
     def _finish(self) -> None:
         session = self.session
-        self.stop()
         if session is None:
             return
+        self._timer.stop()
+        self.session = None
         summary = session.summary()
         if summary.total:
             self.history.add(SessionRecord(
@@ -615,28 +904,70 @@ class PracticePage(QWidget):
                 summary.total, summary.correct, summary.mean_abs_timing_ms,
             ))
             self._show_record()
-        self.strip.set_current(None)
-        self.target.setText("–")
-        self.position.setText(" ")
+        step = self.tempo_step.value() if self.adapt.isChecked() else 5
+        goal = self.goal.value() if self.adapt.isChecked() else None
+        suggested = next_tempo(session.bpm, summary.accuracy, step=step, target=goal)
+        if self.loop.isChecked():
+            self.runs += 1
+            if self.adapt.isChecked():
+                self.bpm.setValue(suggested)
+            change = "" if not self.adapt.isChecked() or suggested == session.bpm else f" → {suggested} BPM"
+            self._set_feedback(f"Run {self.runs}: {summary.accuracy:.0%}{change}", None)
+            self.target.setText("–")
+            self.position.setText("Next run starts in a moment")
+            self._restart.start()
+            return
+        if self._started_metronome:
+            self.metronome.stop()
+            self._started_metronome = False
+        self.stop()
+        self._show_summary(session, summary, suggested)
+
+    def _loop_again(self) -> None:
+        runs = self.runs
+        if self._started_metronome:
+            self.metronome.stop()
+            self._started_metronome = False
+        self.start()
+        self.runs = runs
+
+    def _show_summary(self, session: PracticeSession, summary, suggested: int) -> None:
+        self.tab.set_current(None)
         self.fretboard.set_marks([])
-        lines = [
-            f"{summary.accuracy:.0%} correct ({summary.correct}/{summary.total}).",
-            f"Wrong {summary.wrong}, out of tune {summary.out_of_tune}, missed {summary.missed}.",
-        ]
-        if summary.mean_abs_timing_ms is not None:
-            lines.append(f"Average timing offset {summary.mean_abs_timing_ms:.0f} ms.")
-        if summary.accuracy >= 0.9:
-            lines.append(f"Clean. Try {session.bpm + 5:.0f} BPM.")
-            self.bpm.setValue(int(session.bpm) + 5)
-            color_label(self.result, GREEN)
-        elif summary.accuracy < 0.6:
-            lines.append(f"Slow down: try {max(MIN_BPM, session.bpm - 10):.0f} BPM until it is clean.")
-            color_label(self.result, RED)
+        self.result_score.setText(f"{summary.accuracy:.0%}")
+        if summary.accuracy >= SPEED_UP_AT:
+            caption = "Clean run. Time to push the tempo."
+        elif summary.accuracy < BACK_OFF_BELOW:
+            caption = "Slow it down until it feels easy."
         else:
-            color_label(self.result, None)
-        self.result.setText("  ".join(lines))
-        self.feedback.setText("Done")
-        color_label(self.feedback, None)
+            caption = "Getting there. Same tempo again."
+        self.result_caption.setText(caption)
+        labels = {
+            Verdict.CORRECT: f"{summary.correct} correct",
+            Verdict.OUT_OF_TUNE: f"{summary.out_of_tune} out of tune",
+            Verdict.WRONG: f"{summary.wrong} wrong",
+            Verdict.MISSED: f"{summary.missed} missed",
+        }
+        for verdict, chip in self.result_chips.items():
+            chip.setText(labels[verdict])
+        detail = [f"{summary.correct}/{summary.total} notes at {session.bpm:.0f} BPM."]
+        if summary.mean_abs_timing_ms is not None:
+            detail.append(f"Average timing offset {summary.mean_abs_timing_ms:.0f} ms.")
+        self.result_detail.setText(" ".join(detail))
+        self.result_tab.set_exercise(self.exercise)
+        if self.offset or len(session.exercise.steps) != len(self.exercise.steps):
+            self.result_tab.set_range(self.offset, self.offset + len(session.exercise.steps) - 1)
+        for index, verdict in self.tab.verdicts.items():
+            self.result_tab.set_verdict(index, verdict)
+        # Scroll so the start of the run is in view.
+        self.result_tab.set_current(None)
+        self.suggested_bpm = suggested
+        if suggested == int(session.bpm):
+            self.suggested_button.setText(f"Again at {suggested} BPM")
+        else:
+            verb = "Faster" if suggested > session.bpm else "Slower"
+            self.suggested_button.setText(f"{verb}: {suggested} BPM")
+        self.views.setCurrentWidget(self.results_view)
 
 
 # ------------------------------------------------------------------- Library
@@ -1057,6 +1388,7 @@ class MainWindow(QMainWindow):
         self.library_page.practice_requested.connect(self.open_practice)
         self.theory_page.practice_requested.connect(self.open_practice)
         self.home_page.route_requested.connect(self.show_route)
+        self.practice_page.library_requested.connect(lambda: self.show_route("library"))
 
         self.pages: dict[str, QWidget] = {
             "home": self.home_page,

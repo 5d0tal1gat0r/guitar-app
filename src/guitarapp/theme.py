@@ -47,6 +47,7 @@ TEXT_PAIRS: tuple[tuple[str, str], ...] = (
     ("navy", "honey"),
     ("navy", "green"),
     ("navy", "blue"),
+    ("navy", "line"),
     ("cream", "navy"),
     ("cream", "navy_hover"),
     ("white", "correct"),
@@ -136,6 +137,66 @@ QLabel#Muted {{
 QLabel#Metric {{
     font-size: 20pt;
     font-weight: 800;
+}}
+
+QLabel#SectionTitle {{
+    font-size: 15pt;
+    font-weight: 800;
+}}
+QLabel#Score {{
+    font-size: 40pt;
+    font-weight: 800;
+    padding-right: 12px;
+}}
+QWidget#Card {{
+    background: {p["paper"]};
+    border: 1px solid {p["line"]};
+    border-radius: 14px;
+}}
+QLabel#Chip {{
+    background: {p["sand"]};
+    border-radius: 10px;
+    padding: 3px 10px;
+    font-weight: 700;
+}}
+QLabel#Chip[verdict="correct"] {{
+    background: {p["green"]};
+}}
+QLabel#Chip[verdict="out_of_tune"] {{
+    background: {p["honey"]};
+}}
+QLabel#Chip[verdict="wrong"] {{
+    background: {p["peach"]};
+}}
+QLabel#Chip[verdict="missed"] {{
+    background: {p["line"]};
+}}
+QPushButton#Primary {{
+    background: {p["navy"]};
+    color: {p["cream"]};
+    border: 2px solid {p["navy"]};
+    font-weight: 700;
+    padding: 6px 16px;
+}}
+QPushButton#Primary:hover {{
+    background: {p["navy_hover"]};
+}}
+QPushButton#Primary:focus {{
+    border-color: {p["honey"]};
+}}
+QPushButton#Primary:disabled {{
+    background: {p["sand"]};
+    color: {p["ink_soft"]};
+    border-color: {p["sand"]};
+}}
+QProgressBar {{
+    background: {p["line"]};
+    border: none;
+    border-radius: 4px;
+}}
+QProgressBar::chunk {{
+    background: {p["correct"]};
+    border-radius: 4px;
 }}
 
 /* Navigation rail */
