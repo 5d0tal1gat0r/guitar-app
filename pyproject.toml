@@ -42,5 +42,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/guitarapp"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["/.worktrees", "/.worktrees/**", "/HANDOFF.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
