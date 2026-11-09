@@ -1,4 +1,4 @@
-"""Main window: Practice, Tuner, Metronome, Library and Theory pages."""
+"""Main window: a navigation rail around Home, Practice, Library, Tuner, Metronome, Theory, Quiz and Progress."""
 
 from __future__ import annotations
 
@@ -8,22 +8,24 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QInputDialog, QMessageBox, QPlainTextEdit, QPushButton, QSlider, QSpinBox, QSplitter, QTabWidget,
-    QToolBar, QVBoxLayout, QWidget,
+    QStackedWidget, QToolBar, QVBoxLayout, QWidget, QAbstractButton,
 )
 
 from . import generator
 from .audio import MicInput, input_devices
 from .importers import load_import
 from .history import History, SessionRecord
+from .home import HomePage
 from .metronome import MAX_BPM, MIN_BPM, Metronome, TapTempo
 from .pitch import NoteReading, NoteTracker, Pitch, detect_pitch, reading_from_freq, rms
 from .practice import PracticeSession, StepResult, Verdict
+from .theme import PALETTE, apply_theme, tool_icon
 from .tabs import Exercise, TabError, load_library, parse_tab, render_tab, user_dir
 from .trainer_ui import ProgressPage, QuizPage
 from .theory import (
@@ -688,11 +690,21 @@ class LibraryPage(QWidget):
         import_button.clicked.connect(self.import_file)
         folder = QPushButton("Open folder")
         folder.clicked.connect(self.open_folder)
+        # Managing the library sits under the list; acting on the selection sits under the preview.
+        manage = QHBoxLayout()
+        for button in (paste, import_button, folder):
+            manage.addWidget(button)
+        manage.addStretch(1)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self.list)
+        left_layout.addLayout(manage)
+
         buttons = QHBoxLayout()
-        for button in (practice, self.save_button, paste, import_button, folder):
+        for button in (practice, self.save_button):
             buttons.addWidget(button)
         buttons.addStretch(1)
-
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -700,8 +712,10 @@ class LibraryPage(QWidget):
         right_layout.addLayout(buttons)
 
         splitter = QSplitter()
-        splitter.addWidget(self.list)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(left)
         splitter.addWidget(right)
+        splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
 
         layout = QVBoxLayout(self)
@@ -736,10 +750,17 @@ class LibraryPage(QWidget):
         labels = ("Type", "Root", "Scale / chord", "Position", "Groups", "Notes")
         widgets = (self.kind, self.root, self.scale, self.low_fret, self.group, self.length)
         self._generator_fields = dict(zip(labels, widgets))
-        for column, (label, widget) in enumerate(zip(labels, widgets)):
-            grid.addWidget(QLabel(label), 0, column)
-            grid.addWidget(widget, 1, column)
-        grid.addWidget(generate, 1, len(labels))
+        # Two rows of three fields so the box fits narrow windows.
+        for index, (label, widget) in enumerate(zip(labels, widgets)):
+            row, column = divmod(index, 3)
+            if isinstance(widget, QComboBox):
+                widget.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                widget.setMinimumContentsLength(10)
+            grid.addWidget(QLabel(label), row * 2, column)
+            grid.addWidget(widget, row * 2 + 1, column)
+        grid.addWidget(generate, 3, 3)
+        for column in range(3):
+            grid.setColumnStretch(column, 1)
         self._update_generator_fields()
         return box
 
@@ -991,17 +1012,41 @@ class TheoryPage(QWidget):
 
 # -------------------------------------------------------------- Main window
 
+NAV_ITEMS: tuple[tuple[str, str], ...] = (
+    ("home", "Home"),
+    ("library", "Library"),
+    ("practice", "Practice"),
+    ("tuner", "Tuner"),
+    ("metronome", "Metronome"),
+    ("theory", "Theory"),
+    ("quiz", "Quiz"),
+    ("progress", "Progress"),
+)
+
+
+RAIL_WIDE = 176
+RAIL_COMPACT = 64
+# Below this window width the rail shows icons only (names stay as tooltips and accessible names).
+COMPACT_BELOW = 880
+
+
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, history: History | None = None, start_audio: bool = True):
         super().__init__()
         self.setWindowTitle("Guitar Practice")
+        self.setMinimumSize(760, 600)
         self.resize(1000, 720)
+        app = QApplication.instance()
+        if app is not None and not app.property("guitarapp_themed"):
+            apply_theme(app)
+            app.setProperty("guitarapp_themed", True)
 
         self.hub = AudioHub(self)
         self.bridge = BeatBridge(self)
         self.metronome = Metronome(SAMPLE_RATE, on_beat=self.bridge.beat.emit)
 
-        self.history = History()
+        self.history = history if history is not None else History()
+        self.home_page = HomePage(self.history)
         self.practice_page = PracticePage(self.hub, self.metronome, self.history)
         self.tuner_page = TunerPage(self.hub)
         self.metronome_page = MetronomePage(self.metronome, self.bridge)
@@ -1011,27 +1056,104 @@ class MainWindow(QMainWindow):
         self.progress_page = ProgressPage(self.history)
         self.library_page.practice_requested.connect(self.open_practice)
         self.theory_page.practice_requested.connect(self.open_practice)
+        self.home_page.route_requested.connect(self.show_route)
 
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        for page, name in (
-            (self.practice_page, "Practice"),
-            (self.library_page, "Library"),
-            (self.tuner_page, "Tuner"),
-            (self.metronome_page, "Metronome"),
-            (self.theory_page, "Theory"),
-            (self.quiz_page, "Quiz"),
-            (self.progress_page, "Progress"),
-        ):
-            self.tabs.addTab(page, name)
-        self.setCentralWidget(self.tabs)
+        self.pages: dict[str, QWidget] = {
+            "home": self.home_page,
+            "library": self.library_page,
+            "practice": self.practice_page,
+            "tuner": self.tuner_page,
+            "metronome": self.metronome_page,
+            "theory": self.theory_page,
+            "quiz": self.quiz_page,
+            "progress": self.progress_page,
+        }
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("Pages")
+        self.stack.setContentsMargins(16, 8, 16, 4)
+        for page in self.pages.values():
+            # The stack owns the page gutter, so pages drop their own layout margins.
+            if page.layout() is not None:
+                page.layout().setContentsMargins(0, 0, 0, 0)
+            self.stack.addWidget(page)
+
+        shell = QWidget()
+        shell.setObjectName("Shell")
+        row = QHBoxLayout(shell)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._build_nav())
+        row.addWidget(self.stack, 1)
+        self.setCentralWidget(shell)
         self._build_toolbar()
 
-        space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
-        space.activated.connect(self.on_space)
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        # One press, one action: a held Space must not re-click buttons or flap the metronome.
+        self.space_shortcut.setAutoRepeat(False)
+        self.space_shortcut.activated.connect(self.on_space)
         self.hub.status.connect(self.statusBar().showMessage)
         self.hub.frame.connect(lambda _pitch, level: self.level.set_level(level))
-        self.toggle_mic(True)
+        self.current_route = ""
+        self.show_route("home")
+        self.home_page.cards[0].setFocus()
+        self.toggle_mic(start_audio)
+
+    def _build_nav(self) -> QWidget:
+        rail = QWidget()
+        rail.setObjectName("NavRail")
+        rail.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        rail.setFixedWidth(RAIL_WIDE)
+        self.rail = rail
+        column = QVBoxLayout(rail)
+        column.setContentsMargins(12, 18, 12, 18)
+        column.setSpacing(4)
+        self.brand = QLabel("Guitar Practice")
+        self.brand.setObjectName("Brand")
+        column.addWidget(self.brand)
+        self.route_buttons: dict[str, QPushButton] = {}
+        for route, label in NAV_ITEMS:
+            button = QPushButton(label)
+            button.setObjectName("NavButton")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            button.setAccessibleName(label)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setIcon(tool_icon(route, 20, PALETTE["cream"], PALETTE["navy"]))
+            button.setIconSize(QSize(20, 20))
+            button.setToolTip(label)
+            button.clicked.connect(lambda _checked=False, r=route: self.show_route(r))
+            self.route_buttons[route] = button
+            column.addWidget(button)
+        column.addStretch(1)
+        return rail
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._set_rail_compact(self.width() < COMPACT_BELOW)
+
+    def _set_rail_compact(self, compact: bool) -> None:
+        if self.rail.property("compact") == compact:
+            return
+        self.rail.setProperty("compact", compact)
+        self.rail.setFixedWidth(RAIL_COMPACT if compact else RAIL_WIDE)
+        self.brand.setText("GP" if compact else "Guitar Practice")
+        self.brand.setAlignment(Qt.AlignmentFlag.AlignCenter if compact else Qt.AlignmentFlag.AlignLeft)
+        for (route, label), button in zip(NAV_ITEMS, self.route_buttons.values()):
+            button.setText("" if compact else label)
+            button.setProperty("compact", compact)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def show_route(self, route: str) -> None:
+        page = self.pages[route]
+        self.current_route = route
+        # Checked state is set by hand: an exclusive QButtonGroup would drop
+        # Tab focus from every unchecked button.
+        for name, button in self.route_buttons.items():
+            button.setChecked(name == route)
+        self.stack.setCurrentWidget(page)
+        if route == "home":
+            self.home_page.refresh()
 
     def _build_toolbar(self) -> None:
         bar = QToolBar("Audio")
@@ -1069,17 +1191,22 @@ class MainWindow(QMainWindow):
         self.listen.setChecked(ok)
         self.listen.setText("Listening" if ok else "Mic off")
         self.listen.blockSignals(False)
+        self.home_page.set_microphone_state(ok)
 
     def open_practice(self, exercise: Exercise) -> None:
         self.practice_page.load(exercise)
-        self.tabs.setCurrentWidget(self.practice_page)
+        self.show_route("practice")
 
     def on_space(self) -> None:
-        page = self.tabs.currentWidget()
-        if page is self.metronome_page:
+        if self.current_route == "metronome":
             self.metronome_page.toggle()
-        elif page is self.practice_page and self.practice_page.exercise is not None:
+        elif self.current_route == "practice" and self.practice_page.exercise is not None:
             self.practice_page.toggle()
+        else:
+            # The window-wide shortcut swallows Space; keep it activating the focused button.
+            focus = QApplication.focusWidget()
+            if isinstance(focus, QAbstractButton) and focus.isEnabled():
+                focus.animateClick()
 
     def closeEvent(self, event) -> None:
         self.practice_page.stop()
@@ -1095,6 +1222,8 @@ def run() -> int:
     app.setApplicationName("guitar-app")
     app.setApplicationDisplayName("Guitar Practice")
     app.setDesktopFileName("guitar-app")
+    apply_theme(app)
+    app.setProperty("guitarapp_themed", True)
     window = MainWindow()
     window.show()
     return app.exec()
