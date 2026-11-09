@@ -126,6 +126,32 @@ QPushButton#ActionCard:pressed {{
 QPushButton#ActionCard:focus {{
     border: 3px solid {p["navy"]};
 }}
+QPushButton#ActionCard[hero="true"] {{
+    background: {p["peach"]};
+    border-color: {p["peach"]};
+}}
+QPushButton#ActionCard[hero="true"]:hover {{
+    border-color: {p["navy"]};
+}}
+QPushButton#ActionCard[hero="true"] QLabel#CardTitle {{
+    font-size: 20pt;
+}}
+QPushButton#ActionCard[hero="true"] QLabel#Muted {{
+    color: {p["navy"]};
+}}
+QLabel#CardTitle {{
+    font-size: 13pt;
+    font-weight: 800;
+}}
+QLabel#StatusChip {{
+    background: {p["sand"]};
+    border-radius: 11px;
+    padding: 3px 12px;
+    font-weight: 600;
+}}
+QLabel#StatusChip[active="true"] {{
+    background: {p["green"]};
+}}
 QWidget#SummaryPanel {{
     background: {p["sand"]};
     border-radius: 16px;
